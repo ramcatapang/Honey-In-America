@@ -1,0 +1,101 @@
+# After revieweing the schema for usda_nass_agriculture data, I realized that all the datatypes were string, and that the data needed to be parsed into separate 
+tables and joined. I start by creating four tables, production by lbs., production by USD, bee colony total, and colony collapse disorder.
+
+CREATE TABLE
+  Honey_Production_Anaylisis.Honey_Production_by_lb
+   (state_name string,
+    year INT64,
+    volume_lb INT64)
+
+# Next, I queried the data and inserted the data into the appropriate tables. There were string values and null values under certain values, so they needed to be
+replaced while I was using the CAST function. This is production by lbs.  
+
+INSERT INTO
+  Honey_Production_Analysis.Honey_Production_by_lb
+SELECT
+  DISTINCT state_name,
+  SAFE_CAST(REPLACE(year, ',','') AS INT64) AS year,
+  SUM(SAFE_CAST(REPLACE(REPLACE(value,'(D)',''),',','') AS INT64)) OVER(PARTITION BY year, state_name) AS volume
+FROM (
+  SELECT
+    state_name,
+    year,
+    value,
+  FROM
+    `bigquery-public-data.usda_nass_agriculture.animals_products`
+  WHERE
+    commodity_desc = 'HONEY'
+    AND unit_desc = 'LB'
+    AND short_desc = 'HONEY - PRODUCTION, MEASURED IN LB'
+    AND NOT state_name = 'US TOTAL'
+    AND year > "2017"
+    AND freq_desc = 'ANNUAL'
+  ORDER BY
+    year DESC)
+
+# I then repeated the queries for the production by USD table; replacing the unit_desc for '$' and the short_desc for 'HONEY - PRODUCTION, MEASURED IN $'.
+Following the production totals for the given years, I had to query the Bee Colony inventory. This data was collected in different frequencies so I need to 
+make sure the data I queried specified as 'ANNUAL'.
+
+INSERT INTO
+  Honey_Production_Anaylysis.Bee_Colony_Total
+SELECT
+  DISTINCT state_name,
+  SAFE_CAST(REPLACE(year, ',','') AS INT64) AS year,
+  SUM(SAFE_CAST(REPLACE(REPLACE(value,'(D)',''),',','') AS INT64)) OVER(PARTITION BY year, state_name) AS colonies
+FROM (
+  SELECT
+    state_name,
+    year,
+    value,
+  FROM
+    `bigquery-public-data.usda_nass_agriculture.animals_products`
+  WHERE
+    short_desc = 'HONEY, BEE COLONIES - INVENTORY, MEASURED IN COLONIES'
+    AND NOT state_name = 'US TOTAL'
+    AND freq_desc = 'ANNUAL'
+    AND year > "2017")
+
+# I repreated the query for Colony Collapse disorder; replacing the short_desc for 'HONEY, BEE COLONIES - LOSS, COLONY COLLAPSE DISORDER, MEASURED IN COLONIES'.
+Since the data was recorded monthly, I replaced the freq_desc to 'Monthly'. After the data was parsed into separate tables, I joined the producion tables together
+and the bee colony total and the CCD table together.
+
+SELECT
+  DISTINCT Bee_Colony_Total.state_name,
+  Bee_Colony_Total.year,
+  Bee_Colony_Total.colonies,
+  CCD_Colony_Loss.CCD_Colony_Loss
+FROM
+  Honey_Production_2015_2021.Bee_Colony_Total
+LEFT JOIN
+  Honey_Production_2015_2021.CCD_Colony_Loss
+ON
+  Bee_Colony_Total.state_name = CCD_Colony_Loss.state_name
+  AND Bee_Colony_Total.year = CCD_Colony.year
+ORDER BY
+  state_name,
+  year
+
+# Finally, I joined the two tables into a single table by the state and year with all relative columns.
+
+SELECT
+  DISTINCT Honey_Production_Table.state_name,
+  Honey_Production_Table.year,
+  Honey_Production_Table.volume,
+  Honey_Production_Table.USD,
+  Bee_Colony_CCD_Total.colonies,
+  Bee_Colony_CCD_Total.CCD_Colony_Loss
+FROM
+  Honey_Production_Analysis.Honey_Production_Table
+LEFT JOIN
+  Honey_Production_Analysis.Bee_Colony_CCD_Total
+ON
+  Honey_Production_Table.state_name = Bee_Colony_CCD_Total.state_name
+  AND Honey_Production_Table.year = Bee_Colony_CCD_Total.year
+ORDER BY
+  state_name,
+  year
+
+
+# Once the table was created, I validated the information by cross-checking the table with the USDA NASS Quick Stats database: https://quickstats.nass.usda.gov/. 
+At the time of the query, Big Query did not have access to the 2022 data that was released on March 17, 2023. The data was added externally.
